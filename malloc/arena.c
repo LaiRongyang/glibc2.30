@@ -8,19 +8,19 @@
 #endif
 #include <elf/dl-tunables.h>
 
-/* Compile-time constants.  */
-
-#define HEAP_MIN_SIZE (32 * 1024)
-#ifndef HEAP_MAX_SIZE
-# ifdef DEFAULT_MMAP_THRESHOLD_MAX
-#  define HEAP_MAX_SIZE (2 * DEFAULT_MMAP_THRESHOLD_MAX)
+/* Compile-time constants. ????????????? */
+#define HEAP_MIN_SIZE (32 * 1024) //32 KB
+#ifndef HEAP_MAX_SIZE 
+# ifdef DEFAULT_MMAP_THRESHOLD_MAX // 64位机是4MB
+#  define HEAP_MAX_SIZE (2 * DEFAULT_MMAP_THRESHOLD_MAX) //64 MB 64位机
 # else
 #  define HEAP_MAX_SIZE (1024 * 1024) /* must be a power of two */
 # endif
 #endif
 
 /* HEAP_MIN_SIZE and HEAP_MAX_SIZE limit the size of mmap()ed heaps
-   that are dynamically created for multi-threaded programs.  The
+   that are dynamically created for multi-threaded programs. 
+    The
    maximum size must be a power of two, for fast determination of
    which heap belongs to a chunk.  It should be much larger than the
    mmap threshold, so that requests with a size just below that
@@ -124,8 +124,7 @@ int __malloc_initialized = -1;
    called, so that other fork handlers can use the malloc
    subsystem.  */
 
-void
-__malloc_fork_lock_parent (void)
+void __malloc_fork_lock_parent (void)
 {
   if (__malloc_initialized < 1)
     return;
@@ -144,8 +143,7 @@ __malloc_fork_lock_parent (void)
     }
 }
 
-void
-__malloc_fork_unlock_parent (void)
+void __malloc_fork_unlock_parent (void)
 {
   if (__malloc_initialized < 1)
     return;
@@ -160,8 +158,7 @@ __malloc_fork_unlock_parent (void)
   __libc_lock_unlock (list_lock);
 }
 
-void
-__malloc_fork_unlock_child (void)
+void __malloc_fork_unlock_child (void)
 {
   if (__malloc_initialized < 1)
     return;
@@ -225,8 +222,7 @@ TUNABLE_CALLBACK_FNDECL (set_tcache_unsorted_limit, size_t)
 #include <string.h>
 extern char **_environ;
 
-static char *
-next_env_entry (char ***position)
+static char * next_env_entry (char ***position)
 {
   char **current = *position;
   char *result = NULL;
@@ -428,25 +424,26 @@ dump_heap (heap_info *heap)
    multiple threads, but only one will succeed.  */
 static char *aligned_heap_area;
 
-/* Create a new heap.  size is automatically rounded up to a multiple
-   of the page size. */
-
-static heap_info *
-new_heap (size_t size, size_t top_pad)
+/* 创建一个新堆。大小会自动四舍五入到页面大小的倍数。 top_pad表示在分配内存时，额外多分配的内存 */
+/* 返回是heap info 结构的指针 ，！！！！！ */
+/* 实际mmap的空间大小是HEAP_MAX_SIZE ，在返回前设置这个结构的成员size为size，设置mprotect_size成员为size*/
+/* 剩余的空间用来存储chunk？？？？？*/
+static heap_info * new_heap (size_t size, size_t top_pad)
 {
-  size_t pagesize = GLRO (dl_pagesize);
+  size_t pagesize = GLRO (dl_pagesize);//也
   char *p1, *p2;
   unsigned long ul;
   heap_info *h;
 
+
   if (size + top_pad < HEAP_MIN_SIZE)
-    size = HEAP_MIN_SIZE;
+    size = HEAP_MIN_SIZE; //heap最小的大小是HEAP_MIN_SIZE
   else if (size + top_pad <= HEAP_MAX_SIZE)
-    size += top_pad;
-  else if (size > HEAP_MAX_SIZE)
+    size += top_pad; 
+  else if (size > HEAP_MAX_SIZE) //size不能比HEAP_MAX_SIZE大
     return 0;
   else
-    size = HEAP_MAX_SIZE;
+    size = HEAP_MAX_SIZE;  
   size = ALIGN_UP (size, pagesize);
 
   /* A memory region aligned to a multiple of HEAP_MAX_SIZE is needed.
@@ -454,12 +451,12 @@ new_heap (size_t size, size_t top_pad)
      mapping (on Linux, this is the case for all non-writable mappings
      anyway). */
   p2 = MAP_FAILED;
-  if (aligned_heap_area)
+  if (aligned_heap_area)  //aligned_heap_area表示上一次MMAP分配后的结束地址，如果存在，就首先尝试从该地址分配大小为HEAP_MAX_SIZE的内存
     {
       p2 = (char *) MMAP (aligned_heap_area, HEAP_MAX_SIZE, PROT_NONE,
                           MAP_NORESERVE);
       aligned_heap_area = NULL;
-      if (p2 != MAP_FAILED && ((unsigned long) p2 & (HEAP_MAX_SIZE - 1)))
+      if (p2 != MAP_FAILED && ((unsigned long) p2 & (HEAP_MAX_SIZE - 1))) //如果空间不满足，就解除映射，分配失败
         {
           __munmap (p2, HEAP_MAX_SIZE);
           p2 = MAP_FAILED;
@@ -467,19 +464,20 @@ new_heap (size_t size, size_t top_pad)
     }
   if (p2 == MAP_FAILED)
     {
-      p1 = (char *) MMAP (0, HEAP_MAX_SIZE << 1, PROT_NONE, MAP_NORESERVE);
+      /*如果第一次分配失败了，就会再尝试一次，这次分配HEAP_MAX_SIZE*2大小的内存，并且新内存的起始地址由内核决定。*/
+      /*因为尝试分配了HEAP_MAX_SIZE*2大小的内存，其中必定包含了大小为HEAP_MAX_SIZE且和HEAP_MAX_SIZE对齐的内存*/
+      p1 = (char *) MMAP (0, HEAP_MAX_SIZE << 1, PROT_NONE, MAP_NORESERVE); 
       if (p1 != MAP_FAILED)
         {
-          p2 = (char *) (((unsigned long) p1 + (HEAP_MAX_SIZE - 1))
-                         & ~(HEAP_MAX_SIZE - 1));
+          p2 = (char *) (((unsigned long) p1 + (HEAP_MAX_SIZE - 1)) & ~(HEAP_MAX_SIZE - 1));
           ul = p2 - p1;
           if (ul)
-            __munmap (p1, ul);
+            __munmap (p1, ul); //解除对齐后多余的映射
           else
             aligned_heap_area = p2 + HEAP_MAX_SIZE;
-          __munmap (p2 + HEAP_MAX_SIZE, HEAP_MAX_SIZE - ul);
+          __munmap (p2 + HEAP_MAX_SIZE, HEAP_MAX_SIZE - ul);//解除多余的映射
         }
-      else
+      else //如果第二次分配失败 就会通过MMAP进行第三次分配，只分配HEAP_MAX_SIZE大小的内存，并且起始地址由内核决定，如果又失败了就返回0。
         {
           /* Try to take the chance that an allocation of only HEAP_MAX_SIZE
              is already aligned. */
@@ -506,11 +504,10 @@ new_heap (size_t size, size_t top_pad)
   return h;
 }
 
-/* Grow a heap.  size is automatically rounded up to a
-   multiple of the page size. */
-
-static int
-grow_heap (heap_info *h, long diff)
+/* 增长一个heap.  size is automatically rounded up to a multiple of the page size. */
+/* 在new_heap函数中heap_info *指针指向的操作系统提供的区域实际是HEAP_MAX_SIZE大小，但是heap_info.size为实际的已使用的大小 */
+/* grow_heap函数扩展heap_info.size*/
+static int grow_heap (heap_info *h, long diff)
 {
   size_t pagesize = GLRO (dl_pagesize);
   long new_size;
@@ -537,8 +534,7 @@ grow_heap (heap_info *h, long diff)
 
 /* Shrink a heap.  */
 
-static int
-shrink_heap (heap_info *h, long diff)
+static int shrink_heap (heap_info *h, long diff)
 {
   long new_size;
 
@@ -549,13 +545,13 @@ shrink_heap (heap_info *h, long diff)
   /* Try to re-map the extra heap space freshly to save memory, and make it
      inaccessible.  See malloc-sysdep.h to know when this is true.  */
   if (__glibc_unlikely (check_may_shrink_heap ()))
-    {
-      if ((char *) MMAP ((char *) h + new_size, diff, PROT_NONE,
-                         MAP_FIXED) == (char *) MAP_FAILED)
-        return -2;
+  {
+    if ((char *) MMAP ((char *) h + new_size, diff, PROT_NONE,
+                        MAP_FIXED) == (char *) MAP_FAILED)
+      return -2;
 
-      h->mprotect_size = new_size;
-    }
+    h->mprotect_size = new_size;
+  }
   else
     __madvise ((char *) h + new_size, diff, MADV_DONTNEED);
   /*fprintf(stderr, "shrink %p %08lx\n", h, new_size);*/
@@ -851,8 +847,7 @@ out:
   return result;
 }
 
-static mstate
-arena_get2 (size_t size, mstate avoid_arena)  //获取一个free arena或者创建一个size的arena  具体实现看不太懂
+static mstate arena_get2 (size_t size, mstate avoid_arena)  //获取一个free arena或者创建一个size的arena  具体实现看不太懂
 {
   mstate a;
 
@@ -905,8 +900,7 @@ arena_get2 (size_t size, mstate avoid_arena)  //获取一个free arena或者创�
    out of mmapped areas, so we can try allocating on the main arena.
    Otherwise, it is likely that sbrk() has failed and there is still a chance
    to mmap(), so try one of the other arenas.  */
-static mstate
-arena_get_retry (mstate ar_ptr, size_t bytes)
+static mstate arena_get_retry (mstate ar_ptr, size_t bytes)
 {
   LIBC_PROBE (memory_arena_retry, 2, bytes, ar_ptr);
   if (ar_ptr != &main_arena)
@@ -920,12 +914,10 @@ arena_get_retry (mstate ar_ptr, size_t bytes)
       __libc_lock_unlock (ar_ptr->mutex);
       ar_ptr = arena_get2 (bytes, ar_ptr);
     }
-
   return ar_ptr;
 }
 
-void
-__malloc_arena_thread_freeres (void)
+void __malloc_arena_thread_freeres (void)
 {
   /* Shut down the thread cache first.  This could deallocate data for
      the thread arena, so do this before we put the arena on the free
@@ -936,18 +928,18 @@ __malloc_arena_thread_freeres (void)
   thread_arena = NULL;
 
   if (a != NULL)
+  {
+    __libc_lock_lock (free_list_lock);
+          /* If this was the last attached thread for this arena, put the
+      arena on the free list.  */
+    assert (a->attached_threads > 0);
+    if (--a->attached_threads == 0)
     {
-      __libc_lock_lock (free_list_lock);
-      /* If this was the last attached thread for this arena, put the
-	 arena on the free list.  */
-      assert (a->attached_threads > 0);
-      if (--a->attached_threads == 0)
-	{
-	  a->next_free = free_list;
-	  free_list = a;
-	}
-      __libc_lock_unlock (free_list_lock);
+      a->next_free = free_list;
+      free_list = a;
     }
+    __libc_lock_unlock (free_list_lock);
+  }
 }
 
 /*

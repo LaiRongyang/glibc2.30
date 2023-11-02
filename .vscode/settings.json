@@ -2,6 +2,10 @@
     "files.associations": {
         "assert.h": "c",
         "random": "c",
-        "cmath": "c"
+        "cmath": "c",
+        "array": "c",
+        "string_view": "c",
+        "initializer_list": "c",
+        "utility": "c"
     }
 }

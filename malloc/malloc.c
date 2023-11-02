@@ -826,7 +826,7 @@ int      __posix_memalign(void **, size_t, size_t);
 */
 
 #ifndef DEFAULT_MMAP_THRESHOLD_MIN   //DEFAULT_MMAP_THRESHOLD_MIN 宏定义了一个内存分配请求的阈值。当程序请求的内存大小超过 DEFAULT_MMAP_THRESHOLD_MIN 时，ptmalloc2 就会选择使用 mmap 系统调用来分配内存。相反，如果请求的大小在 DEFAULT_MMAP_THRESHOLD_MIN 以下，ptmalloc2 通常会使用 brk 或 sbrk 来分配内存。
-#define DEFAULT_MMAP_THRESHOLD_MIN (128 * 1024)
+#define DEFAULT_MMAP_THRESHOLD_MIN (128 * 1024)  //128 KB
 #endif
 
 #ifndef DEFAULT_MMAP_THRESHOLD_MAX   //??????????????
@@ -835,9 +835,9 @@ int      __posix_memalign(void **, size_t, size_t);
      maximum heap size and its alignment.  Going above 512k (i.e., 1M
      for new heaps) wastes too much address space.  */
 # if __WORDSIZE == 32
-#  define DEFAULT_MMAP_THRESHOLD_MAX (512 * 1024)
+#  define DEFAULT_MMAP_THRESHOLD_MAX (512 * 1024)    //512 KB 
 # else
-#  define DEFAULT_MMAP_THRESHOLD_MAX (4 * 1024 * 1024 * sizeof(long))
+#  define DEFAULT_MMAP_THRESHOLD_MAX (4 * 1024 * 1024 * sizeof(long))  //32MB  64位机
 # endif
 #endif
 
@@ -4149,7 +4149,7 @@ _int_malloc (mstate av, size_t bytes)
  */
 
 static void
-_int_free (mstate av, mchunkptr p, int have_lock)
+_int_free (mstate av, mchunkptr p, int have_lock) /// mstate  和 have_lock 谁维护？线程
 {
   INTERNAL_SIZE_T size;        /* its size */
   mfastbinptr *fb;             /* associated fastbin */
@@ -4215,7 +4215,7 @@ _int_free (mstate av, mchunkptr p, int have_lock)
     and used quickly in malloc.
   */
 
-  if ((unsigned long)(size) <= (unsigned long)(get_max_fast ())
+  if ((unsigned long)(size) <= (unsigned long)(get_max_fast ())  //如果大小符合fast bin
 
 #if TRIM_FASTBINS
       /*
@@ -4235,11 +4235,10 @@ _int_free (mstate av, mchunkptr p, int have_lock)
 	/* We might not have a lock at this point and concurrent modifications
 	   of system_mem might result in a false positive.  Redo the test after
 	   getting the lock.  */
-	if (!have_lock)
+	if (!have_lock)  //?????????????
 	  {
 	    __libc_lock_lock (av->mutex);
-	    fail = (chunksize_nomask (chunk_at_offset (p, size)) <= 2 * SIZE_SZ
-		    || chunksize (chunk_at_offset (p, size)) >= av->system_mem);
+	    fail = (chunksize_nomask (chunk_at_offset (p, size)) <= 2 * SIZE_SZ || chunksize (chunk_at_offset (p, size)) >= av->system_mem);
 	    __libc_lock_unlock (av->mutex);
 	  }
 
@@ -4251,55 +4250,58 @@ _int_free (mstate av, mchunkptr p, int have_lock)
 
     atomic_store_relaxed (&av->have_fastchunks, true);
     unsigned int idx = fastbin_index(size);
-    fb = &fastbin (av, idx);
+    fb = &fastbin (av, idx);  //找到对应的fast bin
 
     /* Atomically link P to its fastbin: P->FD = *FB; *FB = P;  */
     mchunkptr old = *fb, old2;
 
     if (SINGLE_THREAD_P)
-      {
-	/* Check that the top of the bin is not the record we are going to
-	   add (i.e., double free).  */
-	if (__builtin_expect (old == p, 0))
-	  malloc_printerr ("double free or corruption (fasttop)");
-	p->fd = old;
-	*fb = p;
-      }
-    else
+    {
+        /* Check that the top of the bin is not the record we are going to
+          add (i.e., double free).  */
+        if (__builtin_expect (old == p, 0))
+          malloc_printerr ("double free or corruption (fasttop)");
+        p->fd = old;
+        *fb = p;  //将空闲节点插到fast bins
+    }
+  else
       do
-	{
-	  /* Check that the top of the bin is not the record we are going to
-	     add (i.e., double free).  */
-	  if (__builtin_expect (old == p, 0))
-	    malloc_printerr ("double free or corruption (fasttop)");
-	  p->fd = old2 = old;
-	}
-      while ((old = catomic_compare_and_exchange_val_rel (fb, p, old2))
-	     != old2);
+      {
+        /* Check that the top of the bin is not the record we are going to
+          add (i.e., double free).  */
+        if (__builtin_expect (old == p, 0))
+          malloc_printerr ("double free or corruption (fasttop)");
+        p->fd = old2 = old;
+      }
+      while ((old = catomic_compare_and_exchange_val_rel (fb, p, old2))!= old2);//？？？
 
     /* Check that size of fastbin chunk at the top is the same as
        size of the chunk that we are adding.  We can dereference OLD
        only if we have the lock, otherwise it might have already been
        allocated again.  */
-    if (have_lock && old != NULL
-	&& __builtin_expect (fastbin_index (chunksize (old)) != idx, 0))
+    if (have_lock && old != NULL&& __builtin_expect (fastbin_index (chunksize (old)) != idx, 0))
       malloc_printerr ("invalid fastbin entry (free)");
   }
+
+
+
+
+
 
   /*
     Consolidate other non-mmapped chunks as they arrive.
   */
 
-  else if (!chunk_is_mmapped(p)) {
+  else if (!chunk_is_mmapped(p)) {  //如果非mmap
 
     /* If we're single-threaded, don't lock the arena.  */
     if (SINGLE_THREAD_P)
       have_lock = true;
 
-    if (!have_lock)
+    if (!have_lock)  //如果
       __libc_lock_lock (av->mutex);
 
-    nextchunk = chunk_at_offset(p, size);
+    nextchunk = chunk_at_offset(p, size); //next chunk地址
 
     /* Lightweight tests: check whether the block is already the
        top block.  */
@@ -4314,51 +4316,53 @@ _int_free (mstate av, mchunkptr p, int have_lock)
     if (__glibc_unlikely (!prev_inuse(nextchunk)))
       malloc_printerr ("double free or corruption (!prev)");
 
-    nextsize = chunksize(nextchunk);
+    nextsize = chunksize(nextchunk); //next chunk 大小
+
+
     if (__builtin_expect (chunksize_nomask (nextchunk) <= 2 * SIZE_SZ, 0)
 	|| __builtin_expect (nextsize >= av->system_mem, 0))
       malloc_printerr ("free(): invalid next size (normal)");
 
     free_perturb (chunk2mem(p), size - 2 * SIZE_SZ);
 
-    /* consolidate backward */
+    /* consolidate backward */  //后向合并
     if (!prev_inuse(p)) {
       prevsize = prev_size (p);
-      size += prevsize;
+      size += prevsize;   //size 合并
       p = chunk_at_offset(p, -((long) prevsize));
       if (__glibc_unlikely (chunksize(p) != prevsize))
         malloc_printerr ("corrupted size vs. prev_size while consolidating");
-      unlink_chunk (av, p);
+      unlink_chunk (av, p); //将后向的chunk 摘除，并将指针指向后向的那个chunk
     }
 
-    if (nextchunk != av->top) {
-      /* get and clear inuse bit */
-      nextinuse = inuse_bit_at_offset(nextchunk, nextsize);
+    if (nextchunk != av->top) {   
+          /* get and clear inuse bit */
+          nextinuse = inuse_bit_at_offset(nextchunk, nextsize);
 
       /* consolidate forward */
-      if (!nextinuse) {
-	unlink_chunk (av, nextchunk);
-	size += nextsize;
+      if (!nextinuse) {  //如果前向的chunk空闲
+          unlink_chunk (av, nextchunk);   //合并前向的空闲块
+          size += nextsize;
       } else
-	clear_inuse_bit_at_offset(nextchunk, 0);
+	       clear_inuse_bit_at_offset(nextchunk, 0);//否则设置一下前向的chunk的inuse
 
       /*
-	Place the chunk in unsorted chunk list. Chunks are
-	not placed into regular bins until after they have
-	been given one chance to be used in malloc.
+          Place the chunk in unsorted chunk list. Chunks are
+          not placed into regular bins until after they have
+          been given one chance to be used in malloc.
       */
 
       bck = unsorted_chunks(av);
       fwd = bck->fd;
       if (__glibc_unlikely (fwd->bk != bck))
-	malloc_printerr ("free(): corrupted unsorted chunks");
-      p->fd = fwd;
+	        malloc_printerr ("free(): corrupted unsorted chunks");
+      p->fd = fwd;  //将空闲块插到unsorted bin
       p->bk = bck;
-      if (!in_smallbin_range(size))
-	{
-	  p->fd_nextsize = NULL;
-	  p->bk_nextsize = NULL;
-	}
+      if (!in_smallbin_range(size)) //大chunk
+      {
+        p->fd_nextsize = NULL;
+        p->bk_nextsize = NULL;
+      }
       bck->fd = p;
       fwd->bk = p;
 
@@ -4371,6 +4375,7 @@ _int_free (mstate av, mchunkptr p, int have_lock)
     /*
       If the chunk borders the current high end of memory,
       consolidate into top
+      如果next chunk 是堆的top
     */
 
     else {
@@ -4393,7 +4398,7 @@ _int_free (mstate av, mchunkptr p, int have_lock)
       is reached.
     */
 
-    if ((unsigned long)(size) >= FASTBIN_CONSOLIDATION_THRESHOLD) {
+    if ((unsigned long)(size) >= FASTBIN_CONSOLIDATION_THRESHOLD) {  //超过阈值所以合并？
       if (atomic_load_relaxed (&av->have_fastchunks))
 	malloc_consolidate(av);
 
