@@ -334,7 +334,7 @@ __malloc_assert (const char *assertion, const char *file, unsigned int line,
 #endif
 
 
-/* Definition for getting more memory from the OS.  */  
+/* Definition for getting more memory from the OS.从操作系统获取更多内存的定义。 sbrk  */  
 #define MORECORE         (*__morecore)     
 #define MORECORE_FAILURE 0
 void * __default_morecore (ptrdiff_t);
@@ -355,7 +355,7 @@ void *(*__morecore)(ptrdiff_t) = __default_morecore;
   sample version for pre-OSX macos.
 */
 
-#ifndef MORECORE   //MORECORE 是一种内存分配器中的函数，用于向操作系统请求额外的内存空间。在特定的内存分配实现中（例如，glibc 中的 ptmalloc2 内存分配器），MORECORE 函数通常被用来扩大堆内存（heap）的空间。
+#ifndef MORECORE   
 #define MORECORE sbrk
 #endif
 
@@ -378,10 +378,14 @@ void *(*__morecore)(ptrdiff_t) = __default_morecore;
   permit allocations spanning regions obtained from different
   calls. But defining this when applicable enables some stronger
   consistency checks and space efficiencies.
+  在 ptmalloc 内存分配器的实现中，MORECORE_CONTIGUOUS 宏用于控制是否使用连续的内存块进行内存分配。
+  当定义了这个宏时，ptmalloc 内存分配器会尝试使用 sbrk 系统调用或 brk 系统调用来获取连续的内存块，
+  以满足大块内存的分配请求。
 */
 
 #ifndef MORECORE_CONTIGUOUS
-#define MORECORE_CONTIGUOUS 1
+/*若MORECORE _CONTIGUOUS为真，那个么就利用这样一个事实：对MORECORE的连续调用（带有正参数）总是返回连续递增的地址。unix sbrk就是这样。*/
+#define MORECORE_CONTIGUOUS 1 
 #endif
 
 /*
@@ -1761,34 +1765,39 @@ static struct malloc_par mp_ =
 };
 
 /*
-   Initialize a malloc_state struct.
-
+   初始化 a malloc_state struct.
+   分配区的初始化函数默认分配区的实例 av 是全局静态变量或是已经将 av 中的所有字段都清 0 了。
    This is called from ptmalloc_init () or from _int_new_arena ()
    when creating a new arena.
  */
 
-static void
-malloc_init_state (mstate av)
+static void malloc_init_state (mstate av)
 {
-  int i;
-  mbinptr bin;
+    int i;
+    mbinptr bin;
 
-  /* Establish circular links for normal bins */
-  for (i = 1; i < NBINS; ++i)
+    /* 首先遍历所有的 bins，初始化每个 bin 的空闲链表为空，即将 bin 的 fb 和 bk 都指向 bin 本身。 */
+    for (i = 1; i < NBINS; ++i)
     {
-      bin = bin_at (av, i);
-      bin->fd = bin->bk = bin;
+        bin = bin_at (av, i);
+        bin->fd = bin->bk = bin;
     }
 
-#if MORECORE_CONTIGUOUS    //       MORECORE_CONTIGUOUS  = 1   
-  if (av != &main_arena)
-#endif
-  set_noncontiguous (av);    // 设置 flags 的 NONCONTIGUOUS_BIT位
-  if (av == &main_arena)
-    set_max_fast (DEFAULT_MXFAST);//128 B
-  atomic_store_relaxed (&av->have_fastchunks, false);
+    /*如果设置了连续，则主分区连续分配，非主分配区不连续，否则都设置不连续*/
+    #if MORECORE_CONTIGUOUS    //       MORECORE_CONTIGUOUS  = 1   
+        if (av != &main_arena)
+    #endif
+            set_noncontiguous (av);    // 设置 flags 的 NONCONTIGUOUS_BIT位
 
-  av->top = initial_top (av);
+        /*如果初始化的是主分配区，需要设置 fast bins 中最大chunk 大小，
+        由于主分配区只有一个，并且一定是最先初始化，这就保证了对全局变量global_max_fast 只初始化了一次，
+        只要该全局变量的值非 0，也就意味着主分配区初始化了。*/
+        if (av == &main_arena)
+            set_max_fast (DEFAULT_MXFAST);//128 B 
+        /* 一开始fast bin是没有 fast chunk */
+        atomic_store_relaxed (&av->have_fastchunks, false);
+        /* 初始化 top chunk 为 unsorted chunk*/
+        av->top = initial_top (av);
 }
 
 /*
@@ -1875,7 +1884,6 @@ free_perturb (char *p, size_t n)
    in malloc. In which case, please report it!)
  */
 
-#if !MALLOC_DEBUG
 
 # define check_chunk(A, P)
 # define check_free_chunk(A, P)
@@ -1884,339 +1892,7 @@ free_perturb (char *p, size_t n)
 # define check_malloced_chunk(A, P, N)
 # define check_malloc_state(A)
 
-#else
 
-# define check_chunk(A, P)              do_check_chunk (A, P)
-# define check_free_chunk(A, P)         do_check_free_chunk (A, P)
-# define check_inuse_chunk(A, P)        do_check_inuse_chunk (A, P)
-# define check_remalloced_chunk(A, P, N) do_check_remalloced_chunk (A, P, N)
-# define check_malloced_chunk(A, P, N)   do_check_malloced_chunk (A, P, N)
-# define check_malloc_state(A)         do_check_malloc_state (A)
-
-/*
-   Properties of all chunks
- */
-
-static void
-do_check_chunk (mstate av, mchunkptr p)
-{
-  unsigned long sz = chunksize (p);
-  /* min and max possible addresses assuming contiguous allocation */
-  char *max_address = (char *) (av->top) + chunksize (av->top);
-  char *min_address = max_address - av->system_mem;
-
-  if (!chunk_is_mmapped (p))
-    {
-      /* Has legal address ... */
-      if (p != av->top)
-        {
-          if (contiguous (av))
-            {
-              assert (((char *) p) >= min_address);
-              assert (((char *) p + sz) <= ((char *) (av->top)));
-            }
-        }
-      else
-        {
-          /* top size is always at least MINSIZE */
-          assert ((unsigned long) (sz) >= MINSIZE);
-          /* top predecessor always marked inuse */
-          assert (prev_inuse (p));
-        }
-    }
-  else if (!DUMPED_MAIN_ARENA_CHUNK (p))
-    {
-      /* address is outside main heap  */
-      if (contiguous (av) && av->top != initial_top (av))
-        {
-          assert (((char *) p) < min_address || ((char *) p) >= max_address);
-        }
-      /* chunk is page-aligned */
-      assert (((prev_size (p) + sz) & (GLRO (dl_pagesize) - 1)) == 0);
-      /* mem is aligned */
-      assert (aligned_OK (chunk2mem (p)));
-    }
-}
-
-/*
-   Properties of free chunks
- */
-
-static void
-do_check_free_chunk (mstate av, mchunkptr p)
-{
-  INTERNAL_SIZE_T sz = chunksize_nomask (p) & ~(PREV_INUSE | NON_MAIN_ARENA);
-  mchunkptr next = chunk_at_offset (p, sz);
-
-  do_check_chunk (av, p);
-
-  /* Chunk must claim to be free ... */
-  assert (!inuse (p));
-  assert (!chunk_is_mmapped (p));
-
-  /* Unless a special marker, must have OK fields */
-  if ((unsigned long) (sz) >= MINSIZE)
-    {
-      assert ((sz & MALLOC_ALIGN_MASK) == 0);
-      assert (aligned_OK (chunk2mem (p)));
-      /* ... matching footer field */
-      assert (prev_size (next_chunk (p)) == sz);
-      /* ... and is fully consolidated */
-      assert (prev_inuse (p));
-      assert (next == av->top || inuse (next));
-
-      /* ... and has minimally sane links */
-      assert (p->fd->bk == p);
-      assert (p->bk->fd == p);
-    }
-  else /* markers are always of size SIZE_SZ */
-    assert (sz == SIZE_SZ);
-}
-
-/*
-   Properties of inuse chunks
- */
-
-static void
-do_check_inuse_chunk (mstate av, mchunkptr p)
-{
-  mchunkptr next;
-
-  do_check_chunk (av, p);
-
-  if (chunk_is_mmapped (p))
-    return; /* mmapped chunks have no next/prev */
-
-  /* Check whether it claims to be in use ... */
-  assert (inuse (p));
-
-  next = next_chunk (p);
-
-  /* ... and is surrounded by OK chunks.
-     Since more things can be checked with free chunks than inuse ones,
-     if an inuse chunk borders them and debug is on, it's worth doing them.
-   */
-  if (!prev_inuse (p))
-    {
-      /* Note that we cannot even look at prev unless it is not inuse */
-      mchunkptr prv = prev_chunk (p);
-      assert (next_chunk (prv) == p);
-      do_check_free_chunk (av, prv);
-    }
-
-  if (next == av->top)
-    {
-      assert (prev_inuse (next));
-      assert (chunksize (next) >= MINSIZE);
-    }
-  else if (!inuse (next))
-    do_check_free_chunk (av, next);
-}
-
-/*
-   Properties of chunks recycled from fastbins
- */
-
-static void
-do_check_remalloced_chunk (mstate av, mchunkptr p, INTERNAL_SIZE_T s)
-{
-  INTERNAL_SIZE_T sz = chunksize_nomask (p) & ~(PREV_INUSE | NON_MAIN_ARENA);
-
-  if (!chunk_is_mmapped (p))
-    {
-      assert (av == arena_for_chunk (p));
-      if (chunk_main_arena (p))
-        assert (av == &main_arena);
-      else
-        assert (av != &main_arena);
-    }
-
-  do_check_inuse_chunk (av, p);
-
-  /* Legal size ... */
-  assert ((sz & MALLOC_ALIGN_MASK) == 0);
-  assert ((unsigned long) (sz) >= MINSIZE);
-  /* ... and alignment */
-  assert (aligned_OK (chunk2mem (p)));
-  /* chunk is less than MINSIZE more than request */
-  assert ((long) (sz) - (long) (s) >= 0);
-  assert ((long) (sz) - (long) (s + MINSIZE) < 0);
-}
-
-/*
-   Properties of nonrecycled chunks at the point they are malloced
- */
-
-static void
-do_check_malloced_chunk (mstate av, mchunkptr p, INTERNAL_SIZE_T s)
-{
-  /* same as recycled case ... */
-  do_check_remalloced_chunk (av, p, s);
-
-  /*
-     ... plus,  must obey implementation invariant that prev_inuse is
-     always true of any allocated chunk; i.e., that each allocated
-     chunk borders either a previously allocated and still in-use
-     chunk, or the base of its memory arena. This is ensured
-     by making all allocations from the `lowest' part of any found
-     chunk.  This does not necessarily hold however for chunks
-     recycled via fastbins.
-   */
-
-  assert (prev_inuse (p));
-}
-
-
-/*
-   Properties of malloc_state.
-
-   This may be useful for debugging malloc, as well as detecting user
-   programmer errors that somehow write into malloc_state.
-
-   If you are extending or experimenting with this malloc, you can
-   probably figure out how to hack this routine to print out or
-   display chunk addresses, sizes, bins, and other instrumentation.
- */
-
-static void
-do_check_malloc_state (mstate av)
-{
-  int i;
-  mchunkptr p;
-  mchunkptr q;
-  mbinptr b;
-  unsigned int idx;
-  INTERNAL_SIZE_T size;
-  unsigned long total = 0;
-  int max_fast_bin;
-
-  /* internal size_t must be no wider than pointer type */
-  assert (sizeof (INTERNAL_SIZE_T) <= sizeof (char *));
-
-  /* alignment is a power of 2 */
-  assert ((MALLOC_ALIGNMENT & (MALLOC_ALIGNMENT - 1)) == 0);
-
-  /* Check the arena is initialized. */
-  assert (av->top != 0);
-
-  /* No memory has been allocated yet, so doing more tests is not possible.  */
-  if (av->top == initial_top (av))
-    return;
-
-  /* pagesize is a power of 2 */
-  assert (powerof2(GLRO (dl_pagesize)));
-
-  /* A contiguous main_arena is consistent with sbrk_base.  */
-  if (av == &main_arena && contiguous (av))
-    assert ((char *) mp_.sbrk_base + av->system_mem ==
-            (char *) av->top + chunksize (av->top));
-
-  /* properties of fastbins */
-
-  /* max_fast is in allowed range */
-  assert ((get_max_fast () & ~1) <= request2size (MAX_FAST_SIZE));
-
-  max_fast_bin = fastbin_index (get_max_fast ());
-
-  for (i = 0; i < NFASTBINS; ++i)
-    {
-      p = fastbin (av, i);
-
-      /* The following test can only be performed for the main arena.
-         While mallopt calls malloc_consolidate to get rid of all fast
-         bins (especially those larger than the new maximum) this does
-         only happen for the main arena.  Trying to do this for any
-         other arena would mean those arenas have to be locked and
-         malloc_consolidate be called for them.  This is excessive.  And
-         even if this is acceptable to somebody it still cannot solve
-         the problem completely since if the arena is locked a
-         concurrent malloc call might create a new arena which then
-         could use the newly invalid fast bins.  */
-
-      /* all bins past max_fast are empty */
-      if (av == &main_arena && i > max_fast_bin)
-        assert (p == 0);
-
-      while (p != 0)
-        {
-          /* each chunk claims to be inuse */
-          do_check_inuse_chunk (av, p);
-          total += chunksize (p);
-          /* chunk belongs in this bin */
-          assert (fastbin_index (chunksize (p)) == i);
-          p = p->fd;
-        }
-    }
-
-  /* check normal bins */
-  for (i = 1; i < NBINS; ++i)
-    {
-      b = bin_at (av, i);
-
-      /* binmap is accurate (except for bin 1 == unsorted_chunks) */
-      if (i >= 2)
-        {
-          unsigned int binbit = get_binmap (av, i);
-          int empty = last (b) == b;
-          if (!binbit)
-            assert (empty);
-          else if (!empty)
-            assert (binbit);
-        }
-
-      for (p = last (b); p != b; p = p->bk)
-        {
-          /* each chunk claims to be free */
-          do_check_free_chunk (av, p);
-          size = chunksize (p);
-          total += size;
-          if (i >= 2)
-            {
-              /* chunk belongs in bin */
-              idx = bin_index (size);
-              assert (idx == i);
-              /* lists are sorted */
-              assert (p->bk == b ||
-                      (unsigned long) chunksize (p->bk) >= (unsigned long) chunksize (p));
-
-              if (!in_smallbin_range (size))
-                {
-                  if (p->fd_nextsize != NULL)
-                    {
-                      if (p->fd_nextsize == p)
-                        assert (p->bk_nextsize == p);
-                      else
-                        {
-                          if (p->fd_nextsize == first (b))
-                            assert (chunksize (p) < chunksize (p->fd_nextsize));
-                          else
-                            assert (chunksize (p) > chunksize (p->fd_nextsize));
-
-                          if (p == first (b))
-                            assert (chunksize (p) > chunksize (p->bk_nextsize));
-                          else
-                            assert (chunksize (p) < chunksize (p->bk_nextsize));
-                        }
-                    }
-                  else
-                    assert (p->bk_nextsize == NULL);
-                }
-            }
-          else if (!in_smallbin_range (size))
-            assert (p->fd_nextsize == NULL && p->bk_nextsize == NULL);
-          /* chunk is followed by a legal chain of inuse chunks */
-          for (q = next_chunk (p);
-               (q != av->top && inuse (q) &&
-                (unsigned long) (chunksize (q)) >= MINSIZE);
-               q = next_chunk (q))
-            do_check_inuse_chunk (av, q);
-        }
-    }
-
-  /* top chunk is OK */
-  check_chunk (av, av->top);
-}
-#endif
 
 
 /* ----------------- Support for debugging hooks -------------------- */

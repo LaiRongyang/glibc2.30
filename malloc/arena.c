@@ -220,7 +220,10 @@ static char * next_env_entry (char ***position)
 }
 #endif
 
-
+/*在 glibc 的源代码中，ptmalloc_init 函数负责初始化 ptmalloc 内存分配器的数据结构、锁、缓存等。
+这个函数通常在程序启动时被调用，确保 glibc 内存分配器在程序运行期间能够正常工作。
+具体来说，ptmalloc_init 函数会初始化一些全局变量，创建用于线程同步的锁（例如 mutex），并设置一些参数
+，以便 ptmalloc 内存分配器能够根据多线程程序的需求进行合适的内存分配和释放操作。*/
 
 static void  ptmalloc_init (void)
 {
@@ -235,22 +238,6 @@ static void  ptmalloc_init (void)
 
   malloc_init_state (&main_arena);
 
-#if HAVE_TUNABLES
-  TUNABLE_GET (check, int32_t, TUNABLE_CALLBACK (set_mallopt_check));
-  TUNABLE_GET (top_pad, size_t, TUNABLE_CALLBACK (set_top_pad));
-  TUNABLE_GET (perturb, int32_t, TUNABLE_CALLBACK (set_perturb_byte));
-  TUNABLE_GET (mmap_threshold, size_t, TUNABLE_CALLBACK (set_mmap_threshold));
-  TUNABLE_GET (trim_threshold, size_t, TUNABLE_CALLBACK (set_trim_threshold));
-  TUNABLE_GET (mmap_max, int32_t, TUNABLE_CALLBACK (set_mmaps_max));
-  TUNABLE_GET (arena_max, size_t, TUNABLE_CALLBACK (set_arena_max));
-  TUNABLE_GET (arena_test, size_t, TUNABLE_CALLBACK (set_arena_test));
-# if USE_TCACHE
-  TUNABLE_GET (tcache_max, size_t, TUNABLE_CALLBACK (set_tcache_max));
-  TUNABLE_GET (tcache_count, size_t, TUNABLE_CALLBACK (set_tcache_count));
-  TUNABLE_GET (tcache_unsorted_limit, size_t,
-	       TUNABLE_CALLBACK (set_tcache_unsorted_limit));
-# endif
-#else
   const char *s = NULL;
   if (__glibc_likely (_environ != NULL))
     {
@@ -317,11 +304,6 @@ static void  ptmalloc_init (void)
     __malloc_check_init ();
 #endif
 
-#if HAVE_MALLOC_INIT_HOOK
-  void (*hook) (void) = atomic_forced_read (__malloc_initialize_hook);
-  if (hook != NULL)
-    (*hook)();
-#endif
   __malloc_initialized = 1;
 }
 
