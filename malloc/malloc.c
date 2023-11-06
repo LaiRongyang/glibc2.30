@@ -1606,8 +1606,7 @@ static INTERNAL_SIZE_T global_max_fast;
   global_max_fast = (((s) == 0)						      \
                      ? SMALLBIN_WIDTH : ((s + SIZE_SZ) & ~MALLOC_ALIGN_MASK))
 
-static inline INTERNAL_SIZE_T
-get_max_fast (void)
+static inline INTERNAL_SIZE_T  get_max_fast (void)
 {
   /* Tell the GCC optimizers that global_max_fast is never larger
      than MAX_FAST_SIZE.  This avoids out-of-bounds array accesses in
@@ -1786,7 +1785,7 @@ malloc_init_state (mstate av)
 #endif
   set_noncontiguous (av);    // 设置 flags 的 NONCONTIGUOUS_BIT位
   if (av == &main_arena)
-    set_max_fast (DEFAULT_MXFAST);
+    set_max_fast (DEFAULT_MXFAST);//128 B
   atomic_store_relaxed (&av->have_fastchunks, false);
 
   av->top = initial_top (av);
@@ -4750,7 +4749,7 @@ _int_memalign (mstate av, size_t alignment, size_t bytes)
 
 
 /*
-   ------------------------------ malloc_trim ------------------------------
+   ------------------------------ malloc_trim 收缩Top chunk？------------------------------
  */
 
 static int

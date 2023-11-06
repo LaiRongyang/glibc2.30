@@ -1,15 +1,9 @@
-/* Malloc implementation for multiple threads without lock contention(争用). 
-  */
+/* 无锁争用的多线程Malloc实现. */
 
 #include <stdbool.h>
 
-#if HAVE_TUNABLES
-# define TUNABLE_NAMESPACE malloc
-#endif
-#include <elf/dl-tunables.h>
-
-/* Compile-time constants. ????????????? */
-#define HEAP_MIN_SIZE (32 * 1024) //32 KB
+/* Compile-time constants.  */
+#define HEAP_MIN_SIZE (32 * 1024) //32 KB   /*HEAP_MIN_SIZE 是heap 的对齐*/
 #ifndef HEAP_MAX_SIZE 
 # ifdef DEFAULT_MMAP_THRESHOLD_MAX // 64位机是4MB
 #  define HEAP_MAX_SIZE (2 * DEFAULT_MMAP_THRESHOLD_MAX) //64 MB 64位机
@@ -19,8 +13,7 @@
 #endif
 
 /* HEAP_MIN_SIZE and HEAP_MAX_SIZE limit the size of mmap()ed heaps
-   that are dynamically created for multi-threaded programs. 
-    The
+   that are dynamically created for multi-threaded programs. The
    maximum size must be a power of two, for fast determination of
    which heap belongs to a chunk.  It should be much larger than the
    mmap threshold, so that requests with a size just below that
@@ -34,37 +27,36 @@
    malloc_chunks.  It is allocated with mmap() and always starts at an
    address aligned to HEAP_MAX_SIZE.  */
 
+
 typedef struct _heap_info
 {
-  mstate ar_ptr; /* Arena for this heap. */    //arena 又是怎么定义
-  struct _heap_info *prev; /* Previous heap. */  //和malloc_state 的next有什么区别
-  size_t size;   /* Current size in bytes. */       
+  mstate ar_ptr; /* 指向所属分配区的指针. */    //arena 又是怎么定义
+  struct _heap_info *prev; /* Previous heap.用于将同一个分配区中的 sub_heap 用单向链表链接起来  prev 指向链表中的前一个 sub_heap*/ 
+  size_t size;   /* Current size in bytes. 表示当前 sub_heap 中的内存大小，以 page 对齐*/       
   size_t mprotect_size; /* Size in bytes that has been mprotected
-                           PROT_READ|PROT_WRITE.  */
+                           PROT_READ|PROT_WRITE. 当前 sub_heap 中被读写保护的内存大小，被分配的还是没被分配的？ */
   /* Make sure the following data is properly aligned, particularly
      that sizeof (heap_info) + 2 * SIZE_SZ is a multiple of
-     MALLOC_ALIGNMENT. */
+     MALLOC_ALIGNMENT. 段用于保证 sizeof (heap_info) + 2 * SIZE_SZ 是按 MALLOC_ALIGNMENT 对齐的 */
   char pad[-6 * SIZE_SZ & MALLOC_ALIGN_MASK];
 } heap_info;
 
-/* Get a compile-time error if the heap_info padding is not correct
-   to make alignment work as expected in sYSMALLOc.  */
-extern int sanity_check_heap_info_alignment[(sizeof (heap_info)
-                                             + 2 * SIZE_SZ) % MALLOC_ALIGNMENT
-                                            ? -1 : 1];
 
 /* Thread specific data.  */
+/* 线程私有的分配区实例 */
+/*  __thread是gcc内置的线程局部存储设施，存取效率可以和全局变量相比 */
+static __thread mstate thread_arena attribute_tls_model_ie;   
 
-static __thread mstate thread_arena attribute_tls_model_ie;   // __thread是gcc内置的线程局部存储设施，存取效率可以和全局变量相比   thread_arena//干嘛用的呢
 
 /* Arena free list.  free_list_lock synchronizes access to the
    free_list variable below, and the next_free and attached_threads
    members of struct malloc_state objects.  No other locks must be
    acquired after free_list_lock has been acquired.  */
+/* __libc_lock_define_initialized 是 glibc（GNU C Library）中的一个宏定义 这个宏的目的是定义一个静态的互斥锁，并且在定义时就进行了初始化。*/
 
 __libc_lock_define_initialized (static, free_list_lock);
 static size_t narenas = 1;
-static mstate free_list;   //????干嘛用的
+static mstate free_list;   
 
 /* list_lock prevents concurrent（同时的） writes to the next member of struct
    malloc_state objects.
@@ -94,24 +86,25 @@ int __malloc_initialized = -1;
    is just a hint as to how much memory will be required immediately
    in the new arena. */
 
+/* 查找本线程的私用实例中是否包含一个分配区的指针,返回该指针 */
 #define arena_get(ptr, size) do { \
       ptr = thread_arena;						      \
       arena_lock (ptr, size);						      \
   } while (0)
-
+/* 尝试对该分配区加锁，如果加锁成功，使用该分配区分配内存，如果对该分配区加锁失败，调用 arena_get2 获得一个分配区指针。 */
 #define arena_lock(ptr, size) do {					      \
       if (ptr)								      \
         __libc_lock_lock (ptr->mutex);					      \
-      else								      \
+      else		
+      /* 获得分配区指针*/						      \
         ptr = arena_get2 ((size), NULL);				      \
   } while (0)
 
 /* find the heap and corresponding arena for a given ptr */
-
-#define heap_for_ptr(ptr) \      //？？？？？？？？？怎么理解
-  ((heap_info *) ((unsigned long) (ptr) & ~(HEAP_MAX_SIZE - 1)))
-#define arena_for_chunk(ptr) \
-  (chunk_main_arena (ptr) ? &main_arena : heap_for_ptr (ptr)->ar_ptr)
+/* 每个 sub_heap 的内存块使用 mmap()函数分配，并以 HEAP_MAX_SIZE 对齐，所以可以根据 chunk 的指针地址，获得这个 chunk 所属的 sub_heap 的地址 */
+#define heap_for_ptr(ptr)  ((heap_info *) ((unsigned long) (ptr) & ~(HEAP_MAX_SIZE - 1))) 
+/* 如果不属于主分配区，由于 sub_heap 的头部存放的是 heap_info 的实例，heap_info中保存了分配区的指针，所以可以通过 chunk 的地址获得分配区的地址*/
+#define arena_for_chunk(ptr) (chunk_main_arena (ptr) ? &main_arena : heap_for_ptr (ptr)->ar_ptr)
 
 
 /**************************************************************************/
@@ -124,6 +117,7 @@ int __malloc_initialized = -1;
    called, so that other fork handlers can use the malloc
    subsystem.  */
 
+/* 对非free分配区list加锁 */
 void __malloc_fork_lock_parent (void)
 {
   if (__malloc_initialized < 1)
@@ -135,14 +129,14 @@ void __malloc_fork_lock_parent (void)
   __libc_lock_lock (list_lock);
 
   for (mstate ar_ptr = &main_arena;; )
-    {
-      __libc_lock_lock (ar_ptr->mutex);
-      ar_ptr = ar_ptr->next;
-      if (ar_ptr == &main_arena)
-        break;
-    }
+  {
+    __libc_lock_lock (ar_ptr->mutex);
+    ar_ptr = ar_ptr->next;
+    if (ar_ptr == &main_arena)
+      break;
+  }
 }
-
+/* 对非free分配区list解锁 */
 void __malloc_fork_unlock_parent (void)
 {
   if (__malloc_initialized < 1)
@@ -163,19 +157,19 @@ void __malloc_fork_unlock_child (void)
   if (__malloc_initialized < 1)
     return;
 
-  /* Push all arenas to the free list, except thread_arena, which is
-     attached to the current thread.  */
+  /* 将所有arena推到空闲列表中，除了附加到当前线程的thread_arena。  */
   __libc_lock_init (free_list_lock);
   if (thread_arena != NULL)
     thread_arena->attached_threads = 1;
-  free_list = NULL;
+    /* 原来的free_list 不怕是非空的？*/
+  free_list = NULL; 
   for (mstate ar_ptr = &main_arena;; )
     {
       __libc_lock_init (ar_ptr->mutex);
       if (ar_ptr != thread_arena)
         {
-	  /* This arena is no longer attached to any thread.  */
-	  ar_ptr->attached_threads = 0;
+          /* This arena is no longer attached to any thread.  */
+          ar_ptr->attached_threads = 0;
           ar_ptr->next_free = free_list;
           free_list = ar_ptr;
         }
@@ -188,37 +182,11 @@ void __malloc_fork_unlock_child (void)
 }
 
 #if HAVE_TUNABLES
-void
-TUNABLE_CALLBACK (set_mallopt_check) (tunable_val_t *valp)
-{
-  int32_t value = (int32_t) valp->numval;
-  if (value != 0)
-    __malloc_check_init ();
-}
-
-# define TUNABLE_CALLBACK_FNDECL(__name, __type) \
-static inline int do_ ## __name (__type value);				      \
-void									      \
-TUNABLE_CALLBACK (__name) (tunable_val_t *valp)				      \
-{									      \
-  __type value = (__type) (valp)->numval;				      \
-  do_ ## __name (value);						      \
-}
-
-TUNABLE_CALLBACK_FNDECL (set_mmap_threshold, size_t)
-TUNABLE_CALLBACK_FNDECL (set_mmaps_max, int32_t)
-TUNABLE_CALLBACK_FNDECL (set_top_pad, size_t)
-TUNABLE_CALLBACK_FNDECL (set_perturb_byte, int32_t)
-TUNABLE_CALLBACK_FNDECL (set_trim_threshold, size_t)
-TUNABLE_CALLBACK_FNDECL (set_arena_max, size_t)
-TUNABLE_CALLBACK_FNDECL (set_arena_test, size_t)
 #if USE_TCACHE
-TUNABLE_CALLBACK_FNDECL (set_tcache_max, size_t)
-TUNABLE_CALLBACK_FNDECL (set_tcache_count, size_t)
-TUNABLE_CALLBACK_FNDECL (set_tcache_unsorted_limit, size_t)
 #endif
 #else
 /* Initialization routine. */
+/* 获取环境变量？*/
 #include <string.h>
 extern char **_environ;
 
@@ -253,36 +221,15 @@ static char * next_env_entry (char ***position)
 #endif
 
 
-#ifdef SHARED
-static void *
-__failing_morecore (ptrdiff_t d)
-{
-  return (void *) MORECORE_FAILURE;
-}
 
-extern struct dl_open_hook *_dl_open_hook;
-libc_hidden_proto (_dl_open_hook);
-#endif
-
-static void
-ptmalloc_init (void)
+static void  ptmalloc_init (void)
 {
   if (__malloc_initialized >= 0)
     return;
 
   __malloc_initialized = 0;
 
-#ifdef SHARED
-  /* In case this libc copy is in a non-default namespace, never use brk.
-     Likewise if dlopened from statically linked program.  */
-  Dl_info di;
-  struct link_map *l;
 
-  if (_dl_open_hook != NULL
-      || (_dl_addr (ptmalloc_init, &di, &l, NULL) != 0
-          && l->l_ns != LM_ID_BASE))
-    __morecore = __failing_morecore;
-#endif
 
   thread_arena = &main_arena;
 
@@ -570,8 +517,8 @@ static int shrink_heap (heap_info *h, long diff)
       __munmap ((char *) (heap), HEAP_MAX_SIZE);			      \
     } while (0)
 
-static int
-heap_trim (heap_info *heap, size_t pad)
+//  - 当top chunk大小达到收缩阈值，主分配区会调用malloc_trim()，非主分配区会调用heap_trim()？？？
+static int  heap_trim (heap_info *heap, size_t pad)
 {
   mstate ar_ptr = heap->ar_ptr;
   unsigned long pagesz = GLRO (dl_pagesize);
@@ -646,8 +593,7 @@ heap_trim (heap_info *heap, size_t pad)
 
 /* If REPLACED_ARENA is not NULL, detach it from this thread.  Must be
    called while free_list_lock is held.  */
-static void
-detach_arena (mstate replaced_arena)
+static void detach_arena (mstate replaced_arena)
 {
   if (replaced_arena != NULL)
     {
@@ -846,7 +792,7 @@ out:
 
   return result;
 }
-
+/* 获得一个分配区指针*/
 static mstate arena_get2 (size_t size, mstate avoid_arena)  //获取一个free arena或者创建一个size的arena  具体实现看不太懂
 {
   mstate a;
