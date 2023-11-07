@@ -1,29 +1,7 @@
 /* 多线程的Malloc实现，无锁争用。*/
 /*
- 这是由Doug Lea编写的malloc/free/realloc的一个版本（又名ptmalloc2），
- Wolfram Gloger将其改编为多线程/arenas。
-
-在集成到glibc之后，
-代码的所有部分都进行了实质性的更改。
-不要在ptmalloc2版本中寻找太多的通用性。
-
-* Version ptmalloc2-20011215
-  based on:
-  VERSION 2.7.0 Sun Mar 11 14:14:06 2001  Doug Lea  (dl at gee)
-
-* Quickstart
-
-  In order to compile this implementation, a Makefile is provided with
-  the ptmalloc2 distribution, which has pre-defined targets for some
-  popular systems (e.g. "make posix" for Posix threads).  All that is
-  typically required with regard to compiler flags is the selection of
-  the thread package via defining one out of USE_PTHREADS, USE_THR or
-  USE_SPROC.  Check the thread-m.h file for what effects this has.
-  Many/most systems will additionally require USE_TSD_DATA_HACK to be
-  defined, so this is the default for "make posix".
 
 * Why use this malloc?
-
 这不是有史以来写得最快、最节省空间、最可移植或最可调的malloc。
 然而，它是速度最快的，同时也是最节省空间、便携和可调谐的。
 这些因素之间的一致平衡为malloc密集型程序提供了一个良好的通用分配器。
@@ -38,13 +16,6 @@
   * For very large requests (>= 128KB by default), it relies on system memory mapping facilities, if supported.
   * 对于非常大的请求（默认情况下>=128KB），如果支持的话，它依赖于系统内存映射功能。
 
-  For a longer but slightly out of date high-level description, see  http://gee.cs.oswego.edu/dl/html/malloc.html
-
-  You may already by default be using a C library containing a malloc
-  that is  based on some version of this malloc (for example in
-  linux). You might still want to use the one in this file in order to
-  customize settings or to avoid overheads associated with library
-  versions.
 
 * Contents, described in more detail in "description of public routines" below.
 
@@ -78,7 +49,7 @@
        nearly all current machines and C compilers. However, you can
        define MALLOC_ALIGNMENT to be wider than this if necessary.
 
-  Minimum overhead per allocated chunk:   4 or 8 bytes  ？？？？？？
+  Minimum overhead（开销） per allocated chunk:   4 or 8 bytes  
        Each malloced chunk has a hidden word of overhead holding size and status information.
 
   Minimum allocated size: 4-byte ptrs:  16 bytes    (including 4 overhead)  8-byte ptrs:  24/32 bytes (including, 4/8 overhead)      ptmalloc2 中的 "Minimum allocated size" 是指在该内存分配器中，能够被分配的最小内存块的大小。具体来说，当程序请求内存时，ptmalloc2 会以这个最小分配单位来分配内存，即使请求的内存量比这个值小。
@@ -118,62 +89,7 @@
        also fail because a system is out of memory.)
 
   Thread-safety: thread-safe
-
-  Compliance(遵从): I believe it is compliant with the 1997 Single Unix Specification
-       Also SVID/XPG, ANSI C, and probably others as well.
-
-* Synopsis(概要) of compile-time options:
-
-    People have reported using previous versions of this malloc on all
-    versions of Unix, sometimes by tweaking some of the defines
-    below. It has been tested most extensively on Solaris and Linux.
-    People also report using it in stand-alone embedded systems.
-
-    The implementation is in straight, hand-tuned ANSI C.  It is not
-    at all modular. (Sorry!)  It uses a lot of macros.  To be at all
-    usable, this code should be compiled using an optimizing compiler
-    (for example gcc -O3) that can simplify expressions and control
-    paths. (FAQ: some macros import variables as arguments rather than
-    declare locals because people reported that some debuggers
-    otherwise get confused.)
-
-    OPTION                     DEFAULT VALUE
-
-    Compilation Environment options:
-
-    HAVE_MREMAP                0
-
-    Changing default word sizes:
-
-    INTERNAL_SIZE_T            size_t
-
-    Configuration and functionality options:
-
-    USE_PUBLIC_MALLOC_WRAPPERS NOT defined
-    USE_MALLOC_LOCK            NOT defined   //USE_MALLOC_LOCK 宏定义通常被用来控制是否启用这种锁机制。如果定义了 USE_MALLOC_LOCK 宏，编译器会在 malloc 函数的实现中加入适当的锁，确保在多线程环境下malloc的安全性。如果未定义 USE_MALLOC_LOCK 宏，那么需要程序员自行确保在多线程环境下对malloc的调用进行同步，通常是通过使用锁的方式来实现。
-    MALLOC_DEBUG               NOT defined
-    REALLOC_ZERO_BYTES_FREES   1
-    TRIM_FASTBINS              0
-
-    Options for customizing MORECORE:
-
-    MORECORE                   sbrk
-    MORECORE_FAILURE           -1
-    MORECORE_CONTIGUOUS        1
-    MORECORE_CANNOT_TRIM       NOT defined
-    MORECORE_CLEARS            1
-    MMAP_AS_MORECORE_SIZE      (1024 * 1024)
-
-    Tuning options that are also dynamically changeable via mallopt:
-
-    DEFAULT_MXFAST             64 (for 32bit), 128 (for 64bit)
-    DEFAULT_TRIM_THRESHOLD     128 * 1024
-    DEFAULT_TOP_PAD            0
-    DEFAULT_MMAP_THRESHOLD     128 * 1024
-    DEFAULT_MMAP_MAX           65536
-
-    There are several other #defined constants and macros that you
-    probably don't want to touch unless you are extending or adapting malloc.  */
+  */
 
 /*
   void* is the pointer type that malloc should say it returns
@@ -254,14 +170,12 @@
 #endif
 
 #ifndef NDEBUG
-# define __assert_fail(assertion, file, line, function)			\
-	 __malloc_assert(assertion, file, line, function)
+# define __assert_fail(assertion, file, line, function)		 __malloc_assert(assertion, file, line, function)
 
 extern const char *__progname;
 
 static void
-__malloc_assert (const char *assertion, const char *file, unsigned int line,
-		 const char *function)
+__malloc_assert (const char *assertion, const char *file, unsigned int line, const char *function)
 {
   (void) __fxprintf (NULL, "%s%s%s:%u: %s%sAssertion `%s' failed.\n",
 		     __progname, __progname[0] ? ": " : "",
@@ -273,33 +187,6 @@ __malloc_assert (const char *assertion, const char *file, unsigned int line,
 }
 #endif
 
-#if USE_TCACHE
-/* We want 64 entries.  This is an arbitrary limit, which tunables can reduce.  */
-# define TCACHE_MAX_BINS		64
-# define MAX_TCACHE_SIZE	tidx2usize (TCACHE_MAX_BINS-1)
-
-/* Only used to pre-fill the tunables.  */
-# define tidx2usize(idx)	(((size_t) idx) * MALLOC_ALIGNMENT + MINSIZE - SIZE_SZ)
-
-/* When "x" is from chunksize().  */
-# define csize2tidx(x) (((x) - MINSIZE + MALLOC_ALIGNMENT - 1) / MALLOC_ALIGNMENT)
-/* When "x" is a user-provided size.  */
-# define usize2tidx(x) csize2tidx (request2size (x))
-
-/* With rounding and alignment, the bins are...
-   idx 0   bytes 0..24 (64-bit) or 0..12 (32-bit)
-   idx 1   bytes 25..40 or 13..20
-   idx 2   bytes 41..56 or 21..28
-   etc.  */
-
-/* This is another arbitrary limit, which tunables can change.  Each
-   tcache bin will hold at most this number of chunks.  */
-# define TCACHE_FILL_COUNT 7
-
-/* Maximum chunks in tcache bins for tunables.  This value must fit the range
-   of tcache->counts[] entries, else they may overflow.  */
-# define MAX_TCACHE_COUNT UINT16_MAX
-#endif
 
 
 /*
@@ -329,12 +216,16 @@ __malloc_assert (const char *assertion, const char *file, unsigned int line,
   fastbins.
 */
 
-#ifndef TRIM_FASTBINS  //TRIM_FASTBINS 宏的作用是在特定的情况下，当程序释放内存时，将 fastbins 中的内容清空（trim），即把其中的内存块移除，以增加安全性。这个宏的具体用法和效果可能依赖于具体的 ptmalloc2 版本和编译时的配置。
+#ifndef TRIM_FASTBINS 
 #define TRIM_FASTBINS  0
 #endif
 
 
-/* Definition for getting more memory from the OS.从操作系统获取更多内存的定义。 sbrk  */  
+/*  MORECORE is the name of the routine to call to obtain more memory from the system. 
+Definition for getting more memory from the OS.  
+ MORECORE 其实是sbrk
+ MORECORE_FAILURE is the value returned upon failure of MORECORE
+ */  
 #define MORECORE         (*__morecore)     
 #define MORECORE_FAILURE 0
 void * __default_morecore (ptrdiff_t);
@@ -347,17 +238,6 @@ void *(*__morecore)(ptrdiff_t) = __default_morecore;
   MORECORE-related declarations. By default, rely on sbrk
 */
 
-
-/*
-  MORECORE is the name of the routine to call to obtain more memory
-  from the system.  See below for general guidance on writing
-  alternative MORECORE functions, as well as a version for WIN32 and a
-  sample version for pre-OSX macos.
-*/
-
-#ifndef MORECORE   
-#define MORECORE sbrk
-#endif
 
 /*
   MORECORE_FAILURE is the value returned upon failure of MORECORE
@@ -378,14 +258,10 @@ void *(*__morecore)(ptrdiff_t) = __default_morecore;
   permit allocations spanning regions obtained from different
   calls. But defining this when applicable enables some stronger
   consistency checks and space efficiencies.
-  在 ptmalloc 内存分配器的实现中，MORECORE_CONTIGUOUS 宏用于控制是否使用连续的内存块进行内存分配。
-  当定义了这个宏时，ptmalloc 内存分配器会尝试使用 sbrk 系统调用或 brk 系统调用来获取连续的内存块，
-  以满足大块内存的分配请求。
 */
 
 #ifndef MORECORE_CONTIGUOUS
-/*若MORECORE _CONTIGUOUS为真，那个么就利用这样一个事实：对MORECORE的连续调用（带有正参数）总是返回连续递增的地址。unix sbrk就是这样。*/
-#define MORECORE_CONTIGUOUS 1 
+#define MORECORE_CONTIGUOUS 1
 #endif
 
 /*
@@ -1688,8 +1564,8 @@ struct malloc_par   //????
   unsigned long trim_threshold;
   INTERNAL_SIZE_T top_pad;
   INTERNAL_SIZE_T mmap_threshold;
-  INTERNAL_SIZE_T arena_test;
-  INTERNAL_SIZE_T arena_max;
+  INTERNAL_SIZE_T arena_test;  //用于优化锁的竞争开销 默认没开启优化 不用管？
+  INTERNAL_SIZE_T arena_max;  //用于优化锁的竞争开销 默认没开启优化 不用管？
 
   /* Memory map support */
   int n_mmaps;
@@ -1707,16 +1583,7 @@ struct malloc_par   //????
   /* First address handed out by MORECORE/sbrk.  */
   char *sbrk_base;
 
-#if USE_TCACHE
-  /* Maximum number of buckets to use.  */
-  size_t tcache_bins;
-  size_t tcache_max_bytes;
-  /* Maximum number of chunks in each bucket.  */
-  size_t tcache_count;
-  /* Maximum number of chunks to remove from the unsorted list, which
-     aren't used to prefill the cache.  */
-  size_t tcache_unsorted_limit;
-#endif
+
 };
 
 /* There are several instances of this struct ("arenas") in this
@@ -1755,49 +1622,36 @@ static struct malloc_par mp_ =
   .trim_threshold = DEFAULT_TRIM_THRESHOLD,
 #define NARENAS_FROM_NCORES(n) ((n) * (sizeof (long) == 4 ? 2 : 8))
   .arena_test = NARENAS_FROM_NCORES (1)
-#if USE_TCACHE
-  ,
-  .tcache_count = TCACHE_FILL_COUNT,
-  .tcache_bins = TCACHE_MAX_BINS,
-  .tcache_max_bytes = tidx2usize (TCACHE_MAX_BINS-1),
-  .tcache_unsorted_limit = 0 /* No limit.  */
-#endif
 };
 
 /*
-   初始化 a malloc_state struct.
-   分配区的初始化函数默认分配区的实例 av 是全局静态变量或是已经将 av 中的所有字段都清 0 了。
+   Initialize a malloc_state struct.
+
    This is called from ptmalloc_init () or from _int_new_arena ()
    when creating a new arena.
  */
 
 static void malloc_init_state (mstate av)
 {
-    int i;
-    mbinptr bin;
+  int i;
+  mbinptr bin;
 
-    /* 首先遍历所有的 bins，初始化每个 bin 的空闲链表为空，即将 bin 的 fb 和 bk 都指向 bin 本身。 */
-    for (i = 1; i < NBINS; ++i)
+  /* Establish circular links for normal bins */
+  for (i = 1; i < NBINS; ++i)
     {
-        bin = bin_at (av, i);
-        bin->fd = bin->bk = bin;
+      bin = bin_at (av, i);
+      bin->fd = bin->bk = bin;
     }
 
-    /*如果设置了连续，则主分区连续分配，非主分配区不连续，否则都设置不连续*/
-    #if MORECORE_CONTIGUOUS    //       MORECORE_CONTIGUOUS  = 1   
-        if (av != &main_arena)
-    #endif
-            set_noncontiguous (av);    // 设置 flags 的 NONCONTIGUOUS_BIT位
+#if MORECORE_CONTIGUOUS    //       MORECORE_CONTIGUOUS  = 1   
+  if (av != &main_arena)
+#endif
+  set_noncontiguous (av);    // 设置 flags 的 NONCONTIGUOUS_BIT位
+  if (av == &main_arena)
+    set_max_fast (DEFAULT_MXFAST);//128 B
+  atomic_store_relaxed (&av->have_fastchunks, false);
 
-        /*如果初始化的是主分配区，需要设置 fast bins 中最大chunk 大小，
-        由于主分配区只有一个，并且一定是最先初始化，这就保证了对全局变量global_max_fast 只初始化了一次，
-        只要该全局变量的值非 0，也就意味着主分配区初始化了。*/
-        if (av == &main_arena)
-            set_max_fast (DEFAULT_MXFAST);//128 B 
-        /* 一开始fast bin是没有 fast chunk */
-        atomic_store_relaxed (&av->have_fastchunks, false);
-        /* 初始化 top chunk 为 unsorted chunk*/
-        av->top = initial_top (av);
+  av->top = initial_top (av);
 }
 
 /*
@@ -1827,11 +1681,7 @@ static void *realloc_hook_ini (void *ptr, size_t sz,
 static void *memalign_hook_ini (size_t alignment, size_t sz,
                                 const void *caller) __THROW;
 
-#if HAVE_MALLOC_INIT_HOOK
-void weak_variable (*__malloc_initialize_hook) (void) = NULL;
-compat_symbol (libc, __malloc_initialize_hook,
-	       __malloc_initialize_hook, GLIBC_2_0);
-#endif
+
 
 void weak_variable (*__free_hook) (void *__ptr,
                                    const void *) = NULL;
@@ -1884,6 +1734,7 @@ free_perturb (char *p, size_t n)
    in malloc. In which case, please report it!)
  */
 
+#if !MALLOC_DEBUG
 
 # define check_chunk(A, P)
 # define check_free_chunk(A, P)
@@ -2547,127 +2398,6 @@ mremap_chunk (mchunkptr p, size_t new_size)
 
 /*------------------------ Public wrappers. --------------------------------*/
 
-#if USE_TCACHE
-
-/* We overlay this structure on the user-data portion of a chunk when
-   the chunk is stored in the per-thread cache.  */
-typedef struct tcache_entry
-{
-  struct tcache_entry *next;
-  /* This field exists to detect double frees.  */
-  struct tcache_perthread_struct *key;
-} tcache_entry;
-
-/* There is one of these for each thread, which contains the
-   per-thread cache (hence "tcache_perthread_struct").  Keeping
-   overall size low is mildly important.  Note that COUNTS and ENTRIES
-   are redundant (we could have just counted the linked list each
-   time), this is for performance reasons.  */
-typedef struct tcache_perthread_struct
-{
-  uint16_t counts[TCACHE_MAX_BINS];
-  tcache_entry *entries[TCACHE_MAX_BINS];
-} tcache_perthread_struct;
-
-static __thread bool tcache_shutting_down = false;
-static __thread tcache_perthread_struct *tcache = NULL;
-
-/* Caller must ensure that we know tc_idx is valid and there's room
-   for more chunks.  */
-static __always_inline void
-tcache_put (mchunkptr chunk, size_t tc_idx)
-{
-  tcache_entry *e = (tcache_entry *) chunk2mem (chunk);
-
-  /* Mark this chunk as "in the tcache" so the test in _int_free will
-     detect a double free.  */
-  e->key = tcache;
-
-  e->next = tcache->entries[tc_idx];
-  tcache->entries[tc_idx] = e;
-  ++(tcache->counts[tc_idx]);
-}
-
-/* Caller must ensure that we know tc_idx is valid and there's
-   available chunks to remove.  */
-static __always_inline void *
-tcache_get (size_t tc_idx)
-{
-  tcache_entry *e = tcache->entries[tc_idx];
-  tcache->entries[tc_idx] = e->next;
-  --(tcache->counts[tc_idx]);
-  e->key = NULL;
-  return (void *) e;
-}
-
-static void
-tcache_thread_shutdown (void)
-{
-  int i;
-  tcache_perthread_struct *tcache_tmp = tcache;
-
-  if (!tcache)
-    return;
-
-  /* Disable the tcache and prevent it from being reinitialized.  */
-  tcache = NULL;
-  tcache_shutting_down = true;
-
-  /* Free all of the entries and the tcache itself back to the arena
-     heap for coalescing.  */
-  for (i = 0; i < TCACHE_MAX_BINS; ++i)
-    {
-      while (tcache_tmp->entries[i])
-	{
-	  tcache_entry *e = tcache_tmp->entries[i];
-	  tcache_tmp->entries[i] = e->next;
-	  __libc_free (e);
-	}
-    }
-
-  __libc_free (tcache_tmp);
-}
-
-static void
-tcache_init(void)
-{
-  mstate ar_ptr;
-  void *victim = 0;
-  const size_t bytes = sizeof (tcache_perthread_struct);
-
-  if (tcache_shutting_down)
-    return;
-
-  arena_get (ar_ptr, bytes);
-  victim = _int_malloc (ar_ptr, bytes);
-  if (!victim && ar_ptr != NULL)
-    {
-      ar_ptr = arena_get_retry (ar_ptr, bytes);
-      victim = _int_malloc (ar_ptr, bytes);
-    }
-
-
-  if (ar_ptr != NULL)
-    __libc_lock_unlock (ar_ptr->mutex);
-
-  /* In a low memory situation, we may not be able to allocate memory
-     - in which case, we just keep trying later.  However, we
-     typically do this very early, so either there is sufficient
-     memory, or there isn't enough memory to do non-trivial
-     allocations anyway.  */
-  if (victim)
-    {
-      tcache = (tcache_perthread_struct *) victim;
-      memset (tcache, 0, sizeof (tcache_perthread_struct));
-    }
-
-}
-
-# define MAYBE_INIT_TCACHE() \
-  if (__glibc_unlikely (tcache == NULL)) \
-    tcache_init();
-
-#else  /* !USE_TCACHE */
 # define MAYBE_INIT_TCACHE()
 
 static void
@@ -4065,7 +3795,7 @@ _int_free (mstate av, mchunkptr p, int have_lock) /// mstate  和 have_lock 谁�
       chunks. Then, if the total unused topmost memory exceeds trim
       threshold, ask malloc_trim to reduce top.
 
-      Unless max_fast is 0, we don't know if there are fastbins
+      Unless max_fast is 0, we don't know if there are fastbins_info
       bordering top, so we cannot tell for sure whether threshold
       has been reached unless fastbins are consolidated.  But we
       don't want to consolidate on each free.  As a compromise,
@@ -4760,41 +4490,9 @@ do_set_arena_max (size_t value)
   return 1;
 }
 
-#if USE_TCACHE
-static __always_inline int
-do_set_tcache_max (size_t value)
-{
-  if (value >= 0 && value <= MAX_TCACHE_SIZE)
-    {
-      LIBC_PROBE (memory_tunable_tcache_max_bytes, 2, value, mp_.tcache_max_bytes);
-      mp_.tcache_max_bytes = value;
-      mp_.tcache_bins = csize2tidx (request2size(value)) + 1;
-    }
-  return 1;
-}
 
-static __always_inline int
-do_set_tcache_count (size_t value)
-{
-  if (value <= MAX_TCACHE_COUNT)
-    {
-      LIBC_PROBE (memory_tunable_tcache_count, 2, value, mp_.tcache_count);
-      mp_.tcache_count = value;
-    }
-  return 1;
-}
 
-static __always_inline int
-do_set_tcache_unsorted_limit (size_t value)
-{
-  LIBC_PROBE (memory_tunable_tcache_unsorted_limit, 2, value, mp_.tcache_unsorted_limit);
-  mp_.tcache_unsorted_limit = value;
-  return 1;
-}
-#endif
-
-int
-__libc_mallopt (int param_number, int value)
+int __libc_mallopt (int param_number, int value)
 {
   mstate av = &main_arena;
   int res = 1;
@@ -5004,16 +4702,14 @@ libc_hidden_def (__libc_mallopt)
 
 extern char **__libc_argv attribute_hidden;
 
-static void
-malloc_printerr (const char *str)
+static void malloc_printerr (const char *str)
 {
   __libc_message (do_abort, "%s\n", str);
   __builtin_unreachable ();
 }
 
 /* We need a wrapper function for one of the additions of POSIX.  */
-int
-__posix_memalign (void **memptr, size_t alignment, size_t size)
+int __posix_memalign (void **memptr, size_t alignment, size_t size)
 {
   void *mem;
 
@@ -5039,8 +4735,7 @@ __posix_memalign (void **memptr, size_t alignment, size_t size)
 weak_alias (__posix_memalign, posix_memalign)
 
 
-int
-__malloc_info (int options, FILE *fp)
+int __malloc_info (int options, FILE *fp)
 {
   /* For now, at least.  */
   if (options != 0)
