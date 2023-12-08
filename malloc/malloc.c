@@ -2812,7 +2812,7 @@ _int_malloc(mstate av, size_t bytes)
      aligned.
    */
 
-  if (!checked_request2size(bytes, &nb))
+  if (!checked_request2size(bytes, &nb)) //
   {
     __set_errno(ENOMEM);
     return NULL;
@@ -2957,8 +2957,8 @@ _int_malloc(mstate av, size_t bytes)
   else
   {
     idx = largebin_index(nb);
-    if (atomic_load_relaxed(&av->have_fastchunks))
-      malloc_consolidate(av); // 先合并fast bin
+    if (atomic_load_relaxed(&av->have_fastchunks)) // atomic_load_relaxed返回av->have_fastchunks的值
+      malloc_consolidate(av);                      // 先合并fast bin
   }
 
   /*
@@ -3706,8 +3706,11 @@ _int_free(mstate av, mchunkptr p, int have_lock) /// mstate  和 have_lock 谁�
   purpose since, among other things, it might place chunks back onto
   fastbins.  So, instead, we need to use a minor variant of the same
   code.
+  malloc_contegrate是free（）的一个专门版本，它可以删除fastbins中的块。
+  Free本身不能用于此目的，因为除其他外，它可能会将块放回快速垃圾箱。
+  因此，我们需要使用相同代码的一个小变体。
 */
-
+// malloc_consolidate()函数用于将 fast bins 中的 chunk 合并，并加入 unsorted bin 中
 static void malloc_consolidate(mstate av)
 {
   mfastbinptr *fb;          /* current fastbin being consolidated */
@@ -3740,7 +3743,9 @@ static void malloc_consolidate(mstate av)
   fb = &fastbin(av, 0);
   do
   {
-    p = atomic_exchange_acq(fb, NULL);
+    p = atomic_exchange_acq(fb, NULL); // 将fb
+
+    // 获取当前遍历的 fast bin 中空闲 chunk 单向链表的头指针赋值给 p，如果 p 不为 0，将当前 fast bin 链表的头指针赋值为 0，即删除了该 fast bin 中的空闲 chunk 链表。
     if (p != 0)
     {
       do
@@ -3750,15 +3755,16 @@ static void malloc_consolidate(mstate av)
           if ((&fastbin(av, idx)) != fb)
             malloc_printerr("malloc_consolidate(): invalid chunk size");
         }
-
-        check_inuse_chunk(av, p);
+        // 将空闲 chunk 链表的下一个 chunk 赋值给 nextp。
         nextp = p->fd;
 
         /* Slightly streamlined version of consolidation code in free() */
+        // 获得当前 chunk 的 size，需要去除 size 中的 PREV_INUSE 和 NON_MAIN_ARENA 标志，并获取相邻的下一个 chunk 和下一个 chunk 的大小。
         size = chunksize(p);
         nextchunk = chunk_at_offset(p, size);
         nextsize = chunksize(nextchunk);
 
+        // 如果当前 chunk 的前一个 chunk 空闲，则将当前 chunk 与前一个 chunk 合并成一个空闲chunk，由于前一个 chunk 空闲，则当前 chunk 的 prev_size 保存了前一个 chunk 的大小，计算出合并后的 chunk 大小，并获取前一个 chunk 的指针，将前一个 chunk 从空闲链表中删除。
         if (!prev_inuse(p))
         {
           prevsize = prev_size(p);
@@ -3768,44 +3774,53 @@ static void malloc_consolidate(mstate av)
             malloc_printerr("corrupted size vs. prev_size in fastbins");
           unlink_chunk(av, p);
         }
-
+        // 如果与当前 chunk 相邻的下一个 chunk 不是分配区的 top chunk，
         if (nextchunk != av->top)
         {
+          // 查看与当前 chunk 相邻的下一个 chunk 是否处于 inuse 状态。
           nextinuse = inuse_bit_at_offset(nextchunk, nextsize);
 
           if (!nextinuse)
           {
+            // 将相邻的下一个空闲 chunk 从空闲链表中删除，并计算当前chunk 与下一个 chunk 合并后的 chunk 大小。
             size += nextsize;
             unlink_chunk(av, nextchunk);
           }
           else
+            // 清除当前 chunk 的 inuse 状态，则当前 chunk 空闲了
             clear_inuse_bit_at_offset(nextchunk, 0);
 
+          // 将合并后的 chunk 加入 unsorted bin 的双向循环链表中。
           first_unsorted = unsorted_bin->fd;
           unsorted_bin->fd = p;
           first_unsorted->bk = p;
 
+          // 如果合并后的 chunk 属于 large bin，将 chunk 的 fd_nextsize 和 bk_nextsize 设置为 NULL，因为在 unsorted bin 中这两个字段无用。
           if (!in_smallbin_range(size))
           {
             p->fd_nextsize = NULL;
             p->bk_nextsize = NULL;
           }
-
+          // 设置合并后的空闲 chunk 大小，并标识前一个 chunk 处于 inuse 状态，因为必须保证不能有两个相邻的 chunk 都处于空闲状态。
           set_head(p, size | PREV_INUSE);
+          // 然后将合并后的 chunk 加入 unsorted bin 的双向循环链表中。
           p->bk = unsorted_bin;
           p->fd = first_unsorted;
+          // 最后设置合并后的空闲 chunk 的 foot，chunk 空闲时必须设置 foot，该 foot 处于下一个 chunk 的 prev_size 中，只有 chunk 空闲是 foot 才是有效的。
           set_foot(p, size);
         }
 
         else
         {
+          // 如果当前 chunk 的下一个 chunk 为 top chunk，则将当前 chunk 合并入 top chunk，修改top chunk 的大小。
           size += nextsize;
           set_head(p, size | PREV_INUSE);
           av->top = p;
         }
-
+        // 直到遍历完当前 fast bin 中的所有空闲 chunk。
       } while ((p = nextp) != 0);
     }
+    // 直到遍历完所有的 fast bins。
   } while (fb++ != maxfb);
 }
 
